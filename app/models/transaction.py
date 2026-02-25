@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field, field_validator
 from decimal import Decimal
 from enum import Enum
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 
 
 class Currency(str, Enum):
@@ -37,7 +37,7 @@ class TransactionRequest(BaseModel):
 
 class TransactionResponse(BaseModel):
     transaction_id: str
-    status: str  # "approved" | "declined"
+    status: Literal["approved", "declined"]
     processor_used: Optional[str] = None
     amount: Decimal
     currency: str

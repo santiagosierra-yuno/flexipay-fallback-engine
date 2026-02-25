@@ -177,6 +177,58 @@ Aggregate statistics since service startup.
 
 ---
 
+### Test Utility Endpoints (Demo / Testing Only)
+
+> **These endpoints exist solely to make circuit-breaker behaviour deterministic in demos and integration tests. Do not expose them in production.**
+
+#### `POST /processors/{name}/reset`
+
+Resets a processor's circuit breaker to `CLOSED` state with an empty rolling window.
+
+```bash
+curl -s -X POST http://localhost:8000/processors/VortexPay/reset
+```
+
+```json
+{"processor": "VortexPay", "action": "reset", "state": "closed"}
+```
+
+#### `POST /processors/{name}/inject-failures?count=N`
+
+Injects `N` synthetic failures into the processor's rolling window. If the resulting success rate drops below the trip threshold (default 20%), the circuit breaker opens immediately.
+
+```bash
+curl -s -X POST "http://localhost:8000/processors/VortexPay/inject-failures?count=6"
+```
+
+```json
+{
+  "processor": "VortexPay",
+  "injected_failures": 6,
+  "state": "open",
+  "success_rate": 0.0,
+  "total_calls_in_window": 6
+}
+```
+
+**Typical demo flow:**
+
+```bash
+# 1. Reset to a clean state
+curl -s -X POST http://localhost:8000/processors/VortexPay/reset
+
+# 2. Inject enough failures to trip the circuit breaker
+curl -s -X POST "http://localhost:8000/processors/VortexPay/inject-failures?count=6"
+
+# 3. Send a transaction — VortexPay will be skipped (circuit OPEN)
+curl -s -X POST http://localhost:8000/transactions \
+  -H "Content-Type: application/json" \
+  -d '{"transaction_id":"demo-cb","amount":"100.00","currency":"BRL","merchant_id":"flexipay","card_last_four":"4242"}'
+# → processors_tried will show "VortexPay(circuit_open)", fallback to SwiftPay/PixFlow
+```
+
+---
+
 ## Demo script
 
 Run the full demonstration that exercises all scenarios:

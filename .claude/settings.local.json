@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:yuno-challenge.vercel.app)",
+      "Bash(pip install:*)",
+      "Bash(pip3 install:*)",
+      "Bash(tail:*)",
+      "Bash(./venv/bin/python:*)",
+      "Bash(pkill:*)",
+      "Bash(source venv/bin/activate && python tests/demo.py 2>&1)",
+      "Bash(curl:*)"
+    ]
+  }
+}

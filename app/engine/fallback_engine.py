@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import threading
 import time
 from datetime import datetime, timezone
 
@@ -12,6 +13,8 @@ from app.services.stats_service import StatsService
 from app.config import Settings
 
 logger = logging.getLogger(__name__)
+
+_IDEMPOTENCY_TTL_SECONDS = 86_400  # 24 hours
 
 
 class FallbackEngine:
@@ -27,6 +30,11 @@ class FallbackEngine:
                         BACKOFF_MAX_RETRIES times, then move to next processor
       CIRCUIT_OPEN   -> skip processor entirely, move to next
       All exhausted  -> return declined
+
+    Idempotency:
+      If the same transaction_id is submitted again within 24 hours the
+      cached TransactionResponse is returned immediately without hitting
+      any processor.
     """
 
     def __init__(
@@ -40,8 +48,32 @@ class FallbackEngine:
         self._cb_registry = cb_registry
         self._stats = stats_service
         self._settings = settings
+        # Idempotency cache: transaction_id -> (cached_at: float, TransactionResponse)
+        self._idempotency_cache: dict[str, tuple[float, TransactionResponse]] = {}
+        self._cache_lock = threading.Lock()
+
+    def _get_cached(self, transaction_id: str) -> TransactionResponse | None:
+        with self._cache_lock:
+            entry = self._idempotency_cache.get(transaction_id)
+            if entry is None:
+                return None
+            cached_at, response = entry
+            if time.monotonic() - cached_at > _IDEMPOTENCY_TTL_SECONDS:
+                del self._idempotency_cache[transaction_id]
+                return None
+            return response
+
+    def _store_cached(self, transaction_id: str, response: TransactionResponse) -> None:
+        with self._cache_lock:
+            self._idempotency_cache[transaction_id] = (time.monotonic(), response)
 
     async def process(self, request: TransactionRequest) -> TransactionResponse:
+        cached = self._get_cached(request.transaction_id)
+        if cached is not None:
+            logger.info(
+                f"[TXN {request.transaction_id}] Idempotent replay — returning cached response"
+            )
+            return cached
         start = time.monotonic()
         attempts = 0
         processors_tried: list[str] = []
@@ -121,7 +153,7 @@ class FallbackEngine:
                         f"[TXN {request.transaction_id}] APPROVED via {processor.name} "
                         f"after {attempts} attempt(s) | total latency={total_latency_ms:.1f}ms"
                     )
-                    return TransactionResponse(
+                    response = TransactionResponse(
                         transaction_id=request.transaction_id,
                         status="approved",
                         processor_used=processor.name,
@@ -134,6 +166,8 @@ class FallbackEngine:
                         latency_ms=round(total_latency_ms, 2),
                         processed_at=datetime.now(timezone.utc),
                     )
+                    self._store_cached(request.transaction_id, response)
+                    return response
 
                 elif result.status == ProcessorResultStatus.HARD_DECLINE:
                     cb.record_failure()
@@ -144,7 +178,7 @@ class FallbackEngine:
                         f"[TXN {request.transaction_id}] HARD DECLINE from {processor.name} "
                         f"code={result.decline_code} — NOT retrying"
                     )
-                    return TransactionResponse(
+                    response = TransactionResponse(
                         transaction_id=request.transaction_id,
                         status="declined",
                         processor_used=processor.name,
@@ -157,6 +191,8 @@ class FallbackEngine:
                         latency_ms=round(total_latency_ms, 2),
                         processed_at=datetime.now(timezone.utc),
                     )
+                    self._store_cached(request.transaction_id, response)
+                    return response
 
                 elif result.status == ProcessorResultStatus.RATE_LIMITED:
                     cb.record_failure()
@@ -196,7 +232,7 @@ class FallbackEngine:
             else "soft"
         )
 
-        return TransactionResponse(
+        response = TransactionResponse(
             transaction_id=request.transaction_id,
             status="declined",
             amount=request.amount,
@@ -208,3 +244,5 @@ class FallbackEngine:
             latency_ms=round(total_latency_ms, 2),
             processed_at=datetime.now(timezone.utc),
         )
+        self._store_cached(request.transaction_id, response)
+        return response

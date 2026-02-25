@@ -77,6 +77,7 @@ class FallbackEngine:
         start = time.monotonic()
         attempts = 0
         processors_tried: list[str] = []
+        retry_log: list[str] = []
         last_result: ProcessorResult | None = None
 
         # Cost-aware routing: sort by fee_rate ascending (cheapest first)
@@ -114,6 +115,7 @@ class FallbackEngine:
                         f"[TXN {request.transaction_id}] [{processor.name}] "
                         f"Backoff retry #{backoff_attempt} after {delay:.2f}s"
                     )
+                    retry_log.append(f"{processor.name}: rate_limited, backoff {delay:.2f}s")
 
                 attempts += 1
 
@@ -163,6 +165,7 @@ class FallbackEngine:
                         fee_rate=result.fee_rate,
                         attempts=attempts,
                         processors_tried=processors_tried,
+                        retry_log=retry_log,
                         latency_ms=round(total_latency_ms, 2),
                         processed_at=datetime.now(timezone.utc),
                     )
@@ -188,6 +191,7 @@ class FallbackEngine:
                         decline_type="hard",
                         attempts=attempts,
                         processors_tried=processors_tried,
+                        retry_log=retry_log,
                         latency_ms=round(total_latency_ms, 2),
                         processed_at=datetime.now(timezone.utc),
                     )
@@ -241,6 +245,7 @@ class FallbackEngine:
             decline_type=decline_type,
             attempts=attempts,
             processors_tried=processors_tried,
+            retry_log=retry_log,
             latency_ms=round(total_latency_ms, 2),
             processed_at=datetime.now(timezone.utc),
         )

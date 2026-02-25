@@ -47,5 +47,6 @@ class TransactionResponse(BaseModel):
     decline_type: Optional[str] = None  # "soft" | "hard"
     attempts: int
     processors_tried: list[str] = Field(default_factory=list)
+    retry_log: list[str] = Field(default_factory=list)
     latency_ms: float
     processed_at: datetime

@@ -27,14 +27,15 @@ When a customer payment fails, this engine automatically retries through alterna
 ### Install dependencies
 
 ```bash
-python -m venv venv && source venv/bin/activate
+python -m venv venv
+source venv/bin/activate  # Mac/Linux
 pip install -r requirements.txt
 ```
 
 ### Run the service
 
 ```bash
-./venv/bin/uvicorn app.main:app --reload
+uvicorn app.main:app --reload --port 8000
 ```
 
 The service starts at `http://127.0.0.1:8000`

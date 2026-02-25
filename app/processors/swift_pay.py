@@ -17,7 +17,6 @@ _OUTCOMES = [
 
 _SOFT_CODES = [
     "insufficient_funds",
-    "card_expired",
     "processor_timeout",
     "temporary_unavailable",
 ]
@@ -27,6 +26,7 @@ _HARD_CODES = [
     "do_not_honor",
     "fraud_detected",
     "invalid_card_number",
+    "card_expired",
 ]
 
 

@@ -41,14 +41,6 @@ class FallbackEngine:
         self._stats = stats_service
         self._settings = settings
 
-    def _sort_by_cost(self, processors: list[AbstractProcessor]) -> list[AbstractProcessor]:
-        """Cost-aware routing: prefer cheapest available processor first."""
-        cb = self._cb_registry
-        available = [p for p in processors if cb.get(p.name).allow_request() is not False]
-        # Re-check properly — allow_request has side effects, so just sort all by fee_rate
-        # The CB guard inside the loop handles skipping tripped ones
-        return sorted(processors, key=lambda p: p.fee_rate)
-
     async def process(self, request: TransactionRequest) -> TransactionResponse:
         start = time.monotonic()
         attempts = 0

@@ -51,8 +51,37 @@ class PixFlow(AbstractProcessor):
         latency = random.uniform(0.050, 0.250)
         await asyncio.sleep(latency)
 
-        outcome = _pick_outcome()
+        # Deterministic test card scenarios (override random outcome)
+        card = request.card_last_four
         elapsed_ms = (time.monotonic() - start) * 1000
+        if card == "0000":
+            return ProcessorResult(
+                processor_name=self.name,
+                status=ProcessorResultStatus.HARD_DECLINE,
+                decline_code="fraud_detected",
+                decline_type=DeclineType.HARD,
+                raw_response={"code": "05", "message": "Fraud Detected"},
+                latency_ms=elapsed_ms,
+            )
+        if card == "1111":
+            return ProcessorResult(
+                processor_name=self.name,
+                status=ProcessorResultStatus.SOFT_DECLINE,
+                decline_code="insufficient_funds",
+                decline_type=DeclineType.SOFT,
+                raw_response={"code": "51", "message": "Insufficient Funds"},
+                latency_ms=elapsed_ms,
+            )
+        if card == "9999":
+            await asyncio.sleep(60)  # caller's wait_for will interrupt this
+            return ProcessorResult(
+                processor_name=self.name,
+                status=ProcessorResultStatus.TIMEOUT,
+                raw_response={"code": "timeout", "message": "Connection timed out"},
+                latency_ms=elapsed_ms,
+            )
+
+        outcome = _pick_outcome()
 
         if outcome == ProcessorResultStatus.SUCCESS:
             fee = request.amount * type(request.amount)(str(self.fee_rate))

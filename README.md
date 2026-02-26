@@ -230,6 +230,38 @@ curl -s -X POST http://localhost:8000/transactions \
 
 ---
 
+## Test Cards
+
+The mock processors support deterministic outcomes for specific `card_last_four` values, making it easy to reproduce exact scenarios without relying on random behaviour:
+
+| `card_last_four` | Outcome | Decline code | Notes |
+|---|---|---|---|
+| `0000` | Hard decline | `fraud_detected` | Returned by **all** processors — chain stops immediately, no fallback |
+| `1111` | Soft decline | `insufficient_funds` | Returned by **all** processors — triggers full fallback chain, ultimately declined |
+| `9999` | Timeout | — | Returned by **all** processors — triggers fallback chain via timeouts |
+| Any other value | Random | — | Uses each processor's probability table (see Architecture section) |
+
+**Example cURL commands:**
+
+```bash
+# Hard decline — no retry (card 0000)
+curl -s -X POST http://localhost:8000/transactions \
+  -H "Content-Type: application/json" \
+  -d '{"transaction_id":"test-hard","amount":"100.00","currency":"BRL","merchant_id":"flexipay","card_last_four":"0000"}'
+
+# Soft decline — fallback chain exhausted (card 1111)
+curl -s -X POST http://localhost:8000/transactions \
+  -H "Content-Type: application/json" \
+  -d '{"transaction_id":"test-soft","amount":"100.00","currency":"BRL","merchant_id":"flexipay","card_last_four":"1111"}'
+
+# Timeout on every processor (card 9999)
+curl -s -X POST http://localhost:8000/transactions \
+  -H "Content-Type: application/json" \
+  -d '{"transaction_id":"test-timeout","amount":"100.00","currency":"BRL","merchant_id":"flexipay","card_last_four":"9999"}'
+```
+
+---
+
 ## Demo script
 
 Run the full demonstration that exercises all scenarios:

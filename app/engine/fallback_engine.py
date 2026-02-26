@@ -16,6 +16,12 @@ logger = logging.getLogger(__name__)
 
 _IDEMPOTENCY_TTL_SECONDS = 86_400  # 24 hours
 
+# Sentinel stored in the cache while a coroutine is processing a transaction.
+# Any concurrent request that finds this sentinel falls through and processes
+# independently — both produce the same idempotent outcome and the last
+# _store_and_evict call wins.
+_PROCESSING = object()
+
 
 class FallbackEngine:
     """
@@ -48,27 +54,56 @@ class FallbackEngine:
         self._cb_registry = cb_registry
         self._stats = stats_service
         self._settings = settings
-        # Idempotency cache: transaction_id -> (cached_at: float, TransactionResponse)
-        self._idempotency_cache: dict[str, tuple[float, TransactionResponse]] = {}
+        # Idempotency cache: transaction_id -> (cached_at: float, response | _PROCESSING)
+        self._idempotency_cache: dict[str, tuple[float, object]] = {}
         self._cache_lock = threading.Lock()
 
-    def _get_cached(self, transaction_id: str) -> TransactionResponse | None:
+    def _check_and_claim(self, transaction_id: str) -> TransactionResponse | None:
+        """
+        Single-lock check-and-claim.
+
+        Under one lock acquisition this method either:
+          a) returns the valid cached TransactionResponse, or
+          b) inserts _PROCESSING to claim the slot and returns None
+             (the caller must then process and call _store_and_evict).
+
+        This eliminates the TOCTOU window that existed when check and store
+        were two separate lock acquisitions with async processing in between.
+        """
         with self._cache_lock:
             entry = self._idempotency_cache.get(transaction_id)
-            if entry is None:
-                return None
-            cached_at, response = entry
-            if time.monotonic() - cached_at > _IDEMPOTENCY_TTL_SECONDS:
+            if entry is not None:
+                cached_at, payload = entry
+                if time.monotonic() - cached_at <= _IDEMPOTENCY_TTL_SECONDS:
+                    if payload is not _PROCESSING:
+                        return payload  # type: ignore[return-value]
+                    # Another coroutine already claimed this slot; let this one
+                    # fall through — both produce the same idempotent outcome.
+                    return None
+                # Expired entry — evict and fall through to claim
                 del self._idempotency_cache[transaction_id]
-                return None
-            return response
+            # Claim the slot atomically before releasing the lock
+            self._idempotency_cache[transaction_id] = (time.monotonic(), _PROCESSING)
+            return None
 
-    def _store_cached(self, transaction_id: str, response: TransactionResponse) -> None:
+    def _store_and_evict(self, transaction_id: str, response: TransactionResponse) -> None:
+        """
+        Replace the _PROCESSING placeholder with the final response, then sweep
+        the cache to evict every entry that has exceeded the TTL so the cache
+        stays bounded under sustained traffic.
+        """
         with self._cache_lock:
-            self._idempotency_cache[transaction_id] = (time.monotonic(), response)
+            now = time.monotonic()
+            self._idempotency_cache[transaction_id] = (now, response)
+            stale = [
+                k for k, (ts, _) in self._idempotency_cache.items()
+                if now - ts > _IDEMPOTENCY_TTL_SECONDS
+            ]
+            for k in stale:
+                del self._idempotency_cache[k]
 
     async def process(self, request: TransactionRequest) -> TransactionResponse:
-        cached = self._get_cached(request.transaction_id)
+        cached = self._check_and_claim(request.transaction_id)
         if cached is not None:
             logger.info(
                 f"[TXN {request.transaction_id}] Idempotent replay — returning cached response"
@@ -180,7 +215,7 @@ class FallbackEngine:
                         latency_ms=round(total_latency_ms, 2),
                         processed_at=datetime.now(timezone.utc),
                     )
-                    self._store_cached(request.transaction_id, response)
+                    self._store_and_evict(request.transaction_id, response)
                     return response
 
                 elif result.status == ProcessorResultStatus.HARD_DECLINE:
@@ -206,7 +241,7 @@ class FallbackEngine:
                         latency_ms=round(total_latency_ms, 2),
                         processed_at=datetime.now(timezone.utc),
                     )
-                    self._store_cached(request.transaction_id, response)
+                    self._store_and_evict(request.transaction_id, response)
                     return response
 
                 elif result.status == ProcessorResultStatus.RATE_LIMITED:
@@ -260,5 +295,5 @@ class FallbackEngine:
             latency_ms=round(total_latency_ms, 2),
             processed_at=datetime.now(timezone.utc),
         )
-        self._store_cached(request.transaction_id, response)
+        self._store_and_evict(request.transaction_id, response)
         return response

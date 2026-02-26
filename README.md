@@ -268,7 +268,7 @@ Run the full demonstration that exercises all scenarios:
 
 ```bash
 # Terminal 1: start the server
-uvicorn app.main:app --reload
+uvicorn app.main:app --reload --port 8000
 
 # Terminal 2: run the demo
 python tests/demo.py
@@ -381,12 +381,15 @@ FallbackEngine.process()
 | Decision | Rationale |
 |---|---|
 | **In-memory state** | Circuit breaker state and stats are stored in memory. Simple and fast for this challenge. In production: Redis for distributed state across multiple instances. |
-| **Random mock processors** | Each processor has a probability table for outcomes (success, soft decline, hard decline, rate limit, timeout). Tuned to make fallback behavior visible without being too frequent. |
+| **Random mock processors** | Each processor has a probability table for outcomes (success, soft decline, hard decline, rate limit, timeout). Tuned to make fallback behavior visible without being too frequent. Deterministic overrides available via `card_last_four` (see Test Cards section). |
 | **asyncio.wait_for for timeouts** | Processor timeouts are simulated by sleeping for 60s. The engine uses `asyncio.wait_for(3s)` to interrupt them. This cleanly separates timeout logic from processor logic. |
 | **Full jitter backoff** | Uses random(0, min(cap, base * 2^attempt)) to avoid thundering herd when many clients retry simultaneously. |
 | **Cost-aware routing** | Processors are sorted by fee_rate before each transaction. Since VortexPay < SwiftPay < PixFlow, this naturally favors the primary processor, but dynamically re-routes if cheaper processors are circuit-broken. |
+| **Currency-aware routing (BRL)** | Brazilian Real transactions are routed to PixFlow first because PixFlow supports PIX natively, giving it a structural conversion advantage for that payment method. Cost-aware ordering (VortexPay → SwiftPay → PixFlow) is preserved for USD and MXN. |
 | **Minimum 5 samples before tripping** | Prevents the circuit breaker from tripping on the very first failure when the window is empty. |
 | **TransactionResponse always 200** | Both approved and declined transactions return HTTP 200. The `status` field indicates the outcome. A declined transaction is a valid business outcome, not an error. HTTP 4xx/5xx are reserved for invalid requests or server errors. |
+| **threading.Lock over asyncio.Lock** | The circuit breaker and stats service use `threading.Lock` because their state is accessed from both async request handlers and potential sync contexts. In a purely async codebase, `asyncio.Lock` would be preferred — this is a noted trade-off. |
+| **Idempotency cache (24h TTL)** | Duplicate `transaction_id` submissions return the cached response immediately without re-processing. Prevents double charges on client retries. TTL of 24 hours matches typical payment retry windows. In production: distributed cache (Redis) with atomic check-and-set. |
 
 ---
 
@@ -418,7 +421,8 @@ FallbackEngine.process()
 │   └── services/
 │       └── stats_service.py      # In-memory stats accumulator
 ├── tests/
-│   └── demo.py                   # Full demonstration script
+│   ├── test_engine.py            # pytest unit tests (6 scenarios)
+│   └── demo.py                   # Interactive demonstration script
 ├── requirements.txt
 └── README.md
 ```

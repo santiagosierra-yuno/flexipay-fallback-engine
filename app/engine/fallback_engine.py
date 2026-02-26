@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 from app.processors.base import AbstractProcessor
 from app.circuit_breaker.registry import CircuitBreakerRegistry
-from app.models.transaction import TransactionRequest, TransactionResponse
+from app.models.transaction import Currency, TransactionRequest, TransactionResponse
 from app.models.processor import ProcessorResult, ProcessorResultStatus
 from app.engine.backoff import exponential_backoff
 from app.services.stats_service import StatsService
@@ -80,8 +80,19 @@ class FallbackEngine:
         retry_log: list[str] = []
         last_result: ProcessorResult | None = None
 
-        # Cost-aware routing: sort by fee_rate ascending (cheapest first)
-        ordered_processors = sorted(self._processors, key=lambda p: p.fee_rate)
+        # Currency-aware routing: BRL transactions are routed to PixFlow first because
+        # PixFlow supports PIX natively, giving it a structural conversion advantage
+        # for Brazilian Real payments.  All other currencies use cost-aware ordering
+        # (cheapest processor first).
+        if request.currency == Currency.BRL:
+            pix = [p for p in self._processors if p.name == "PixFlow"]
+            rest = sorted(
+                [p for p in self._processors if p.name != "PixFlow"],
+                key=lambda p: p.fee_rate,
+            )
+            ordered_processors = pix + rest
+        else:
+            ordered_processors = sorted(self._processors, key=lambda p: p.fee_rate)
 
         logger.info(
             f"[TXN {request.transaction_id}] Processing {request.amount} {request.currency} "

@@ -23,7 +23,13 @@ class TransactionRequest(BaseModel):
     )
     amount: Decimal = Field(..., gt=0, le=1_000_000, decimal_places=2)
     currency: Currency = Currency.BRL
-    merchant_id: str = Field(..., min_length=1, max_length=64)
+    merchant_id: str = Field(
+        ...,
+        min_length=1,
+        max_length=64,
+        pattern=r"^[\w\-]+$",
+        description="Merchant identifier (alphanumeric, hyphens, underscores)",
+    )
     card_last_four: str = Field(..., pattern=r"^\d{4}$")
     metadata: dict = Field(default_factory=dict)
 

@@ -393,6 +393,17 @@ FallbackEngine.process()
 
 ---
 
+## Payment Domain Notes
+
+| Concept | How it applies here |
+|---|---|
+| **Authorization vs Capture** | This engine handles **authorization only** — it asks a processor whether funds can be reserved on the card. Capture (actually moving the money) would be a separate API call in a real system, typically triggered after goods are shipped or a service is rendered. |
+| **Settlement** | After a successful capture, funds move from the cardholder's bank to the merchant's account. This normally takes 1–3 business days and is managed by the card network and acquiring bank — entirely out of scope for this engine. |
+| **Partial amounts** | Not supported. Every transaction is all-or-nothing: a processor either authorizes the full requested amount or declines. Partial-authorization flows (common in debit scenarios) would require additional response fields and retry logic. |
+| **Currency routing** | BRL transactions are routed to PixFlow first because PixFlow supports PIX — Brazil's instant-payment rail — giving it a structural conversion advantage for Brazilian Real payments. USD and MXN use cost-aware ordering (VortexPay → SwiftPay → PixFlow, cheapest first). |
+
+---
+
 ## Project Structure
 
 ```

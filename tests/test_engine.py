@@ -5,6 +5,8 @@ no HTTP server is needed.  Processor responses are controlled through
 lightweight mock objects that return a fixed ProcessorResult.
 """
 
+import random
+import threading
 from decimal import Decimal
 
 import pytest
@@ -361,3 +363,38 @@ async def test_deterministic_cards():
 
     assert result_soft.status == ProcessorResultStatus.SOFT_DECLINE
     assert result_soft.decline_code == "insufficient_funds"
+
+
+def test_circuit_breaker_thread_safety():
+    """50 threads call record_failure/record_success concurrently; state must stay consistent."""
+    settings = Settings()
+    cb = CircuitBreaker(
+        name="ThreadSafeProc",
+        window_size=settings.CB_ROLLING_WINDOW_SIZE,
+        window_seconds=settings.CB_ROLLING_WINDOW_SECONDS,
+        trip_threshold=settings.CB_TRIP_THRESHOLD,
+        cooldown_seconds=settings.CB_COOLDOWN_SECONDS,
+    )
+
+    errors: list[Exception] = []
+
+    def worker() -> None:
+        try:
+            if random.random() < 0.5:
+                cb.record_failure()
+            else:
+                cb.record_success()
+        except Exception as exc:  # pragma: no cover
+            errors.append(exc)
+
+    threads = [threading.Thread(target=worker) for _ in range(50)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert errors == [], f"Exceptions raised in threads: {errors}"
+
+    snap = cb.status_snapshot
+    assert snap["total_calls_in_window"] >= 0
+    assert snap["success_rate"] is None or 0.0 <= snap["success_rate"] <= 1.0
